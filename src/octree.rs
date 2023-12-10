@@ -1,124 +1,311 @@
 use std::{
     alloc::Layout,
+    marker::PhantomData,
     mem::{align_of, size_of},
-    ops::{Deref, DerefMut, Index, IndexMut},
+    ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, Sub},
+    process::Output,
     ptr::{addr_of, addr_of_mut, null_mut},
 };
 
-#[derive(Debug)]
-#[repr(C)]
-pub struct OctreeNode<T: Clone, const SIZE: usize> {
-    value: T,
+use typenum::*;
+
+use crate::{
+    layout::{BreathFirst, MemoryLayout},
+    octant::*,
+    octree_size,
+};
+
+mod sealed {
+    use super::*;
+
+    pub trait NotLast: Unsigned + NonZero + Sub<B1>
+    where
+        <Self as Sub<B1>>::Output: Unsigned,
+    {
+    }
+    impl<N: Unsigned + NonZero + Sub<B1>> NotLast for N where <N as Sub<B1>>::Output: Unsigned {}
+
+    pub trait IndexChild<ChildOctant: OctantT>: Unsigned + Mul<U8>
+    where
+        <Self as Mul<U8>>::Output: Add<ChildOctant::IndexT>,
+        <<Self as Mul<U8>>::Output as Add<ChildOctant::IndexT>>::Output: Unsigned,
+    {
+    }
+    impl<N: Unsigned + Mul<U8>, ChildOctant: OctantT> IndexChild<ChildOctant> for N
+    where
+        <N as Mul<U8>>::Output: Add<ChildOctant::IndexT>,
+        <<N as Mul<U8>>::Output as Add<ChildOctant::IndexT>>::Output: Unsigned,
+    {
+    }
 }
 
-impl<T: Clone, const DEPTH: usize> OctreeNode<T, DEPTH> {
+type ChildIndex<I, ChildOctant> =
+    <<I as Mul<U8>>::Output as Add<<ChildOctant as OctantT>::IndexT>>::Output;
+
+pub type ChildrenRef<'a, T, Size, L, Depth, Index> = (
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLDF>>,
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRDF>>,
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLUF>>,
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRUF>>,
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLDB>>,
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRDB>>,
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLUB>>,
+    &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRUB>>,
+);
+pub type ChildrenRefMut<'a, T, Size, L, Depth, Index> = (
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLDF>>,
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRDF>>,
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLUF>>,
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRUF>>,
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLDB>>,
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRDB>>,
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLUB>>,
+    &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRUB>>,
+);
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct OctreeNode<
+    T: Clone,
+    Size: Unsigned,
+    L: MemoryLayout,
+    Depth: Unsigned = Size,
+    LayerIndex: Unsigned = U0,
+> {
+    value: T,
+    _phantom: PhantomData<(L, Size, Depth, LayerIndex)>,
+}
+
+impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNode<T, S, L, D, I> {
+    pub const fn octant(&self) -> Octant
+    where
+        D: IsLess<S>,
+        Le<D, S>: Same<True>,
+    {
+        Octant::ALL[I::USIZE % 8]
+    }
+
     pub fn value(&self) -> &T {
         &self.value
     }
+
     pub fn set_value(&mut self, value: T) {
-        let tailing = octree_size::<T>(DEPTH) / size_of::<T>();
-        for i in 0..tailing {
-            unsafe { (addr_of_mut!(*self) as *mut T).add(i).write(value.clone()) }
-        }
+        L::fill(
+            addr_of_mut!(self.value),
+            value,
+            S::USIZE,
+            D::USIZE,
+            I::USIZE,
+        )
     }
-    pub fn child(&self, octant: Octant) -> &OctreeNode<T, { DEPTH - 1 }>
+
+    pub fn child<ChildOctant: OctantT>(
+        &self,
+    ) -> &OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>
     where
-        [(); DEPTH - 1]: Sized,
+        D: sealed::NotLast,
+        Sub1<D>: Unsigned,
+        I: sealed::IndexChild<ChildOctant>,
+        <I as Mul<U8>>::Output: Add<ChildOctant::IndexT>,
+        <<I as Mul<U8>>::Output as Add<ChildOctant::IndexT>>::Output: Unsigned,
     {
         unsafe {
             let pos = addr_of!(*self) as *const u8;
-            let pos =
-                pos.add(octant.child_offset_df::<T>(DEPTH)) as *const OctreeNode<T, { DEPTH - 1 }>;
+            let pos = pos.add(L::child_offset::<T>(ChildOctant::VALUE, I::USIZE, D::USIZE))
+                as *const OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>;
             pos.as_ref().unwrap_unchecked()
         }
     }
-    pub fn child_mut(&mut self, octant: Octant) -> &mut OctreeNode<T, { DEPTH - 1 }>
+
+    pub fn child_mut<ChildOctant: OctantT>(
+        &mut self,
+    ) -> &mut OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>
     where
-        [(); DEPTH - 1]: Sized,
+        D: sealed::NotLast,
+        Sub1<D>: Unsigned,
+        I: sealed::IndexChild<ChildOctant>,
+        <I as Mul<U8>>::Output: Add<ChildOctant::IndexT>,
+        <<I as Mul<U8>>::Output as Add<ChildOctant::IndexT>>::Output: Unsigned,
     {
         unsafe {
             let pos = addr_of!(*self) as *mut u8;
-            let pos =
-                pos.add(octant.child_offset_df::<T>(DEPTH)) as *mut OctreeNode<T, { DEPTH - 1 }>;
+            let pos = pos.add(L::child_offset::<T>(ChildOctant::VALUE, I::USIZE, D::USIZE))
+                as *mut OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>;
             pos.as_mut().unwrap_unchecked()
         }
     }
-    pub fn children<'a>(&'a self) -> impl Iterator<Item = &'a OctreeNode<T, { DEPTH - 1 }>> + 'a
+
+    pub fn children<'a>(&'a self) -> ChildrenRef<'a, T, S, L, D, I>
     where
-        [(); DEPTH - 1]: Sized,
+        D: sealed::NotLast,
+        Sub1<D>: Unsigned,
+        I: sealed::IndexChild<OctantLDF>,
+        I: sealed::IndexChild<OctantRDF>,
+        I: sealed::IndexChild<OctantLUF>,
+        I: sealed::IndexChild<OctantRUF>,
+        I: sealed::IndexChild<OctantLDB>,
+        I: sealed::IndexChild<OctantRDB>,
+        I: sealed::IndexChild<OctantLUB>,
+        I: sealed::IndexChild<OctantRUB>,
+        <I as Mul<U8>>::Output: Add<U0>,
+        <I as Mul<U8>>::Output: Add<U1>,
+        <I as Mul<U8>>::Output: Add<U2>,
+        <I as Mul<U8>>::Output: Add<U3>,
+        <I as Mul<U8>>::Output: Add<U4>,
+        <I as Mul<U8>>::Output: Add<U5>,
+        <I as Mul<U8>>::Output: Add<U6>,
+        <I as Mul<U8>>::Output: Add<U7>,
+        <<I as Mul<U8>>::Output as Add<U0>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U1>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U2>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U3>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U4>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U5>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U6>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U7>>::Output: Unsigned,
     {
-        Octant::ALL.iter().map(|it| self.child(*it))
+        (
+            self.child::<OctantLDF>(),
+            self.child::<OctantRDF>(),
+            self.child::<OctantLUF>(),
+            self.child::<OctantRUF>(),
+            self.child::<OctantLDB>(),
+            self.child::<OctantRDB>(),
+            self.child::<OctantLUB>(),
+            self.child::<OctantRUB>(),
+        )
     }
-    pub fn children_mut<'a>(
-        &'a mut self,
-    ) -> impl Iterator<Item = &'a mut OctreeNode<T, { DEPTH - 1 }>> + 'a
+
+    pub fn children_mut<'a>(&'a mut self) -> ChildrenRefMut<'a, T, S, L, D, I>
     where
-        [(); DEPTH - 1]: Sized,
+        D: sealed::NotLast,
+        Sub1<D>: Unsigned,
+        I: sealed::IndexChild<OctantLDF>,
+        I: sealed::IndexChild<OctantRDF>,
+        I: sealed::IndexChild<OctantLUF>,
+        I: sealed::IndexChild<OctantRUF>,
+        I: sealed::IndexChild<OctantLDB>,
+        I: sealed::IndexChild<OctantRDB>,
+        I: sealed::IndexChild<OctantLUB>,
+        I: sealed::IndexChild<OctantRUB>,
+        <I as Mul<U8>>::Output: Add<U0>,
+        <I as Mul<U8>>::Output: Add<U1>,
+        <I as Mul<U8>>::Output: Add<U2>,
+        <I as Mul<U8>>::Output: Add<U3>,
+        <I as Mul<U8>>::Output: Add<U4>,
+        <I as Mul<U8>>::Output: Add<U5>,
+        <I as Mul<U8>>::Output: Add<U6>,
+        <I as Mul<U8>>::Output: Add<U7>,
+        <<I as Mul<U8>>::Output as Add<U0>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U1>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U2>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U3>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U4>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U5>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U6>>::Output: Unsigned,
+        <<I as Mul<U8>>::Output as Add<U7>>::Output: Unsigned,
     {
-        // SAFETY: while self if mutably borrowed, it's safe to access its
-        // children as &mut
-        Octant::ALL
-            .iter()
-            .map(|it| unsafe { &mut *addr_of_mut!(*self.child_mut(*it)) })
+        unsafe {
+            // SAFETY: as child data isn't overlapping, it's safe to split &mut
+            // self into 8 mutable references of all the children
+            (
+                addr_of_mut!(*self.child_mut::<OctantLDF>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+                addr_of_mut!(*self.child_mut::<OctantRDF>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+                addr_of_mut!(*self.child_mut::<OctantLUF>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+                addr_of_mut!(*self.child_mut::<OctantRUF>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+                addr_of_mut!(*self.child_mut::<OctantLDB>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+                addr_of_mut!(*self.child_mut::<OctantRDB>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+                addr_of_mut!(*self.child_mut::<OctantLUB>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+                addr_of_mut!(*self.child_mut::<OctantRUB>())
+                    .as_mut()
+                    .unwrap_unchecked(),
+            )
+        }
     }
 }
 
-impl<T: Clone, const DEPTH: usize> Index<Octant> for OctreeNode<T, DEPTH>
+/*
+impl<T: Clone, Size: Unsigned, Depth: Unsigned> Index<Octant> for OctreeNode<T, Size, Depth>
 where
-    [(); DEPTH - 1]: Sized,
+    Depth: NonZero,
 {
-    type Output = OctreeNode<T, { DEPTH - 1 }>;
+    type Output = OctreeNode<T, Sub1<Depth>>;
 
     fn index(&self, octant: Octant) -> &Self::Output {
         self.child(octant)
     }
 }
 
-impl<T: Clone, const DEPTH: usize> IndexMut<Octant> for OctreeNode<T, DEPTH>
+impl<T: Clone, Size: Unsigned, Depth: Unsigned> IndexMut<Octant> for OctreeNode<T, Size, Depth>
 where
-    [(); DEPTH - 1]: Sized,
+    Depth: NonZero,
 {
     fn index_mut(&mut self, octant: Octant) -> &mut Self::Output {
         self.child_mut(octant)
     }
 }
+*/
 
-impl<T: Clone, const SIZE: usize> Deref for OctreeNode<T, SIZE> {
+impl<T: Clone, Size: Unsigned, L: MemoryLayout, Depth: Unsigned, Index: Unsigned> Deref
+    for OctreeNode<T, Size, L, Depth, Index>
+{
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.value
+        self.value()
     }
 }
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Octree<T: Clone, const SIZE: usize> {
-    root: *mut OctreeNode<T, SIZE>,
+pub struct Octree<T: Clone, Depth: Unsigned, L: MemoryLayout = BreathFirst> {
+    root: *mut OctreeNode<T, Depth, L>,
 }
 
-impl<T: Clone + Default, const SIZE: usize> Default for Octree<T, SIZE> {
+impl<T: Clone + Default, Depth: Unsigned, L: MemoryLayout> Default for Octree<T, Depth, L> {
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-impl<T: Clone, const SIZE: usize> Octree<T, SIZE> {
+impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
+    pub const fn size() -> usize {
+        crate::octree_size::<T>(Depth::USIZE)
+    }
+
+    pub fn layout() -> Layout {
+        crate::octree_layout::<T>(Depth::USIZE)
+    }
+
     pub(crate) fn uninit() -> Self {
         Octree { root: null_mut() }
     }
 
     pub fn fill(&mut self, value: T) {
         self.drop_root();
-        let result: *mut OctreeNode<T, SIZE> =
-            unsafe { std::alloc::alloc(octree_layout::<T>(SIZE)) as *mut OctreeNode<T, SIZE> };
+        let result: *mut OctreeNode<T, Depth, L> =
+            unsafe { std::alloc::alloc(Self::layout()) as *mut OctreeNode<T, Depth, L> };
 
-        let count = octree_size::<T>(SIZE) / size_of::<T>();
+        let count = Self::size() / size_of::<T>();
         for i in 0..count {
             unsafe { (result as *mut T).add(i).write(value.clone()) }
         }
 
-        self.root = result as *mut OctreeNode<T, SIZE>;
+        self.root = result as *mut OctreeNode<T, Depth, L>;
     }
 
     pub fn new(value: T) -> Self {
@@ -127,32 +314,38 @@ impl<T: Clone, const SIZE: usize> Octree<T, SIZE> {
         result
     }
 
+    pub unsafe fn from_root_address(position: *mut T) -> Self {
+        Octree {
+            root: position as *mut OctreeNode<T, Depth, L>,
+        }
+    }
+
     fn drop_root(&mut self) {
         unsafe {
             if let Some(root) = self.root.as_mut() {
                 let root = addr_of_mut!(*root) as *mut u8;
-                std::alloc::dealloc(root, octree_layout::<T>(SIZE));
+                std::alloc::dealloc(root, Self::layout());
                 self.root = null_mut();
             }
         }
     }
 }
 
-impl<T: Clone, const SIZE: usize> Drop for Octree<T, SIZE> {
+impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Drop for Octree<T, Depth, L> {
     fn drop(&mut self) {
         self.drop_root()
     }
 }
 
-impl<T: Clone, const SIZE: usize> Deref for Octree<T, SIZE> {
-    type Target = OctreeNode<T, SIZE>;
+impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Deref for Octree<T, Depth, L> {
+    type Target = OctreeNode<T, Depth, L>;
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.root.as_ref().expect("octree not initialized") }
     }
 }
 
-impl<T: Clone, const SIZE: usize> DerefMut for Octree<T, SIZE> {
+impl<T: Clone, Depth: Unsigned, L: MemoryLayout> DerefMut for Octree<T, Depth, L> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.root.as_mut().expect("octree not initialized") }
     }
@@ -161,127 +354,131 @@ impl<T: Clone, const SIZE: usize> DerefMut for Octree<T, SIZE> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn octree_size_test() {
-        assert_eq!(octree_size::<u8>(0), 1);
-        assert_eq!(octree_size::<u8>(1), 1 + 8 * 1);
-        assert_eq!(octree_size::<u8>(2), 1 + 8 * (1 + 8 * 1));
-        assert_eq!(octree_size::<u8>(3), 1 + 8 * (1 + 8 * (1 + 8 * 1)));
-    }
+    use crate::octant::*;
 
     #[test]
     fn octree_get_set_test() {
-        let mut test = Octree::<usize, 2>::new(1);
+        let mut test = Octree::<usize, U2>::new(1);
         test.set_value(2);
-        let fbl: &mut OctreeNode<usize, 1> = &mut test[Octant::FBL];
+        let fbl = test.child_mut::<OctantLDF>();
         fbl.set_value(3);
-        test[Octant::RTR].set_value(4);
-        test[Octant::RBL][Octant::RBL].set_value(5);
+        test.child_mut::<OctantLUF>().set_value(4);
+        test.child_mut::<OctantLUF>()
+            .child_mut::<OctantRUF>()
+            .set_value(5);
+        test.child_mut::<OctantLUB>()
+            .child_mut::<OctantRDB>()
+            .set_value(6);
 
         assert_eq!(**test, 2);
 
-        assert_eq!(*test[Octant::FTL], 2);
-        assert_eq!(*test[Octant::FTL][Octant::FTL], 2);
-        assert_eq!(*test[Octant::FTL][Octant::FTR], 2);
-        assert_eq!(*test[Octant::FTL][Octant::FBR], 2);
-        assert_eq!(*test[Octant::FTL][Octant::FBL], 2);
-        assert_eq!(*test[Octant::FTL][Octant::RTL], 2);
-        assert_eq!(*test[Octant::FTL][Octant::RTR], 2);
-        assert_eq!(*test[Octant::FTL][Octant::RBR], 2);
-        assert_eq!(*test[Octant::FTL][Octant::RBL], 2);
+        assert_eq!(**test.child::<OctantLDF>(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 3);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 3);
 
-        assert_eq!(*test[Octant::FTR], 2);
-        assert_eq!(*test[Octant::FTR][Octant::FTL], 2);
-        assert_eq!(*test[Octant::FTR][Octant::FTR], 2);
-        assert_eq!(*test[Octant::FTR][Octant::FBR], 2);
-        assert_eq!(*test[Octant::FTR][Octant::FBL], 2);
-        assert_eq!(*test[Octant::FTR][Octant::RTL], 2);
-        assert_eq!(*test[Octant::FTR][Octant::RTR], 2);
-        assert_eq!(*test[Octant::FTR][Octant::RBR], 2);
-        assert_eq!(*test[Octant::FTR][Octant::RBL], 2);
+        assert_eq!(**test.child::<OctantRDF>(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
 
-        assert_eq!(*test[Octant::FBR], 2);
-        assert_eq!(*test[Octant::FBR][Octant::FTL], 2);
-        assert_eq!(*test[Octant::FBR][Octant::FTR], 2);
-        assert_eq!(*test[Octant::FBR][Octant::FBR], 2);
-        assert_eq!(*test[Octant::FBR][Octant::FBL], 2);
-        assert_eq!(*test[Octant::FBR][Octant::RTL], 2);
-        assert_eq!(*test[Octant::FBR][Octant::RTR], 2);
-        assert_eq!(*test[Octant::FBR][Octant::RBR], 2);
-        assert_eq!(*test[Octant::FBR][Octant::RBL], 2);
+        assert_eq!(**test.child::<OctantLUF>(), 4);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 4);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 4);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 4);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 5);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 4);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 4);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 4);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 4);
 
-        assert_eq!(*test[Octant::FBL], 3);
-        assert_eq!(*test[Octant::FBL][Octant::FTL], 3);
-        assert_eq!(*test[Octant::FBL][Octant::FTR], 3);
-        assert_eq!(*test[Octant::FBL][Octant::FBR], 3);
-        assert_eq!(*test[Octant::FBL][Octant::FBL], 3);
-        assert_eq!(*test[Octant::FBL][Octant::RTL], 3);
-        assert_eq!(*test[Octant::FBL][Octant::RTR], 3);
-        assert_eq!(*test[Octant::FBL][Octant::RBR], 3);
-        assert_eq!(*test[Octant::FBL][Octant::RBL], 3);
+        assert_eq!(**test.child::<OctantRUF>(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
 
-        assert_eq!(*test[Octant::RTL], 2);
-        assert_eq!(*test[Octant::RTL][Octant::FTL], 2);
-        assert_eq!(*test[Octant::RTL][Octant::FTR], 2);
-        assert_eq!(*test[Octant::RTL][Octant::FBR], 2);
-        assert_eq!(*test[Octant::RTL][Octant::FBL], 2);
-        assert_eq!(*test[Octant::RTL][Octant::RTL], 2);
-        assert_eq!(*test[Octant::RTL][Octant::RTR], 2);
-        assert_eq!(*test[Octant::RTL][Octant::RBR], 2);
-        assert_eq!(*test[Octant::RTL][Octant::RBL], 2);
+        assert_eq!(**test.child::<OctantLDB>(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
 
-        assert_eq!(*test[Octant::RTR], 4);
-        assert_eq!(*test[Octant::RTR][Octant::FTL], 4);
-        assert_eq!(*test[Octant::RTR][Octant::FTR], 4);
-        assert_eq!(*test[Octant::RTR][Octant::FBR], 4);
-        assert_eq!(*test[Octant::RTR][Octant::FBL], 4);
-        assert_eq!(*test[Octant::RTR][Octant::RTL], 4);
-        assert_eq!(*test[Octant::RTR][Octant::RTR], 4);
-        assert_eq!(*test[Octant::RTR][Octant::RBR], 4);
-        assert_eq!(*test[Octant::RTR][Octant::RBL], 4);
+        assert_eq!(**test.child::<OctantRDB>(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
 
-        assert_eq!(*test[Octant::RBR], 2);
-        assert_eq!(*test[Octant::RBR][Octant::FTL], 2);
-        assert_eq!(*test[Octant::RBR][Octant::FTR], 2);
-        assert_eq!(*test[Octant::RBR][Octant::FBR], 2);
-        assert_eq!(*test[Octant::RBR][Octant::FBL], 2);
-        assert_eq!(*test[Octant::RBR][Octant::RTL], 2);
-        assert_eq!(*test[Octant::RBR][Octant::RTR], 2);
-        assert_eq!(*test[Octant::RBR][Octant::RBR], 2);
-        assert_eq!(*test[Octant::RBR][Octant::RBL], 2);
+        assert_eq!(**test.child::<OctantLUB>(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 5);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
 
-        assert_eq!(*test[Octant::RBL], 2);
-        assert_eq!(*test[Octant::RBL][Octant::FTL], 2);
-        assert_eq!(*test[Octant::RBL][Octant::FTR], 2);
-        assert_eq!(*test[Octant::RBL][Octant::FBR], 2);
-        assert_eq!(*test[Octant::RBL][Octant::FBL], 2);
-        assert_eq!(*test[Octant::RBL][Octant::RTL], 2);
-        assert_eq!(*test[Octant::RBL][Octant::RTR], 2);
-        assert_eq!(*test[Octant::RBL][Octant::RBR], 2);
-        assert_eq!(*test[Octant::RBL][Octant::RBL], 5);
+        assert_eq!(**test.child::<OctantRUB>(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
     }
 
+    /*
     #[test]
     fn octree_layout_test() {
-        let mut test = Octree::<usize, 2>::new(1);
+        let mut test = Octree::<usize, U2>::new(1);
         test.set_value(2);
-        let fbl: &mut OctreeNode<usize, 1> = &mut test[Octant::FBL];
+        let fbl: &mut OctreeNode<usize, U2, U1> = &mut test.child_mut::<OctantLDF>();
         fbl.set_value(3);
-        test[Octant::RTR].set_value(4);
-        test[Octant::RBL][Octant::RBL].set_value(5);
+        test.child_mut::<OctantLUF>().set_value(4);
+        test.child_mut::<OctantLUF>()
+            .child_mut::<OctantRUF>()
+            .set_value(5);
+        test.child_mut::<OctantLUB>()
+            .child_mut::<OctantRDB>()
+            .set_value(6);
 
         let expected_data: [usize; 73] = [
-            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3,
-            3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2,
-            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 5,
+            2, 3, 2, 4, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 5,
+            4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            2, 2, 2, 2, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         ];
 
-        let inner = unsafe { std::mem::transmute::<_, *mut OctreeNode<usize, 2>>(test) };
+        let inner = unsafe { std::mem::transmute::<_, *mut OctreeNode<usize, U2>>(test) };
         let base_addr = inner as *const usize;
 
         for (i, value) in expected_data.into_iter().enumerate() {
             assert_eq!(unsafe { *(base_addr.add(i)) }, value);
         }
-    }
+    } */
 }

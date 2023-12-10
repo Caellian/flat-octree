@@ -27,25 +27,6 @@ impl Octant {
         Octant::LUB,
         Octant::RUB,
     ];
-
-    pub const fn child_offset_df<T>(&self, depth: usize) -> usize {
-        if depth == 0 {
-            return size_of::<T>();
-        }
-        let child_size = crate::octree_size::<T>(depth - 1);
-        let end_of_current = size_of::<T>();
-        let start_of_next = child_size * (self.bits() as usize);
-        end_of_current + start_of_next
-    }
-
-    pub const fn child_offset_bf<T>(&self, index: usize, depth: usize) -> usize {
-        if depth == 0 {
-            return size_of::<T>();
-        }
-        let end_of_current = (8 - index) * 8usize.pow(depth as u32 - 1) * size_of::<T>();
-        let start_of_next = index * 8usize.pow(depth as u32) * size_of::<T>();
-        end_of_current + start_of_next
-    }
 }
 
 pub trait OctantT {
