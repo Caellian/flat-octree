@@ -1,0 +1,16 @@
+[package]
+name = "flat-octree"
+version = "0.1.0"
+edition = "2021"
+description = "A linear octree implementation"
+authors = ["Tin Švagelj <tin.svagelj@live.com>"]
+license = "MIT OR Apache-2.0 OR Zlib"
+keywords = ["memory", "container", "octree"]
+categories = ["data-structures", "memory-management"]
+repository = "https://github.com/Caellian/flat-octree"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+typenum = "1.17"
+bitflags = "2.4"
