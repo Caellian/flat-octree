@@ -12,7 +12,7 @@ use typenum::*;
 use crate::{
     layout::{BreathFirst, MemoryLayout},
     octant::*,
-    octree_size,
+    subtree_size,
 };
 
 mod sealed {
@@ -110,8 +110,12 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         <<I as Mul<U8>>::Output as Add<ChildOctant::IndexT>>::Output: Unsigned,
     {
         unsafe {
-            let pos = addr_of!(*self) as *const u8;
-            let pos = pos.add(L::child_offset::<T>(ChildOctant::VALUE, I::USIZE, D::USIZE))
+            let pos = addr_of!(self.value).add(L::child_offset::<T>(
+                ChildOctant::VALUE,
+                S::USIZE,
+                D::USIZE,
+                I::USIZE,
+            ))
                 as *const OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>;
             pos.as_ref().unwrap_unchecked()
         }
@@ -128,8 +132,12 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         <<I as Mul<U8>>::Output as Add<ChildOctant::IndexT>>::Output: Unsigned,
     {
         unsafe {
-            let pos = addr_of!(*self) as *mut u8;
-            let pos = pos.add(L::child_offset::<T>(ChildOctant::VALUE, I::USIZE, D::USIZE))
+            let pos = addr_of_mut!(self.value).add(L::child_offset::<T>(
+                ChildOctant::VALUE,
+                S::USIZE,
+                D::USIZE,
+                I::USIZE,
+            ))
                 as *mut OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>;
             pos.as_mut().unwrap_unchecked()
         }
@@ -238,28 +246,6 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
     }
 }
 
-/*
-impl<T: Clone, Size: Unsigned, Depth: Unsigned> Index<Octant> for OctreeNode<T, Size, Depth>
-where
-    Depth: NonZero,
-{
-    type Output = OctreeNode<T, Sub1<Depth>>;
-
-    fn index(&self, octant: Octant) -> &Self::Output {
-        self.child(octant)
-    }
-}
-
-impl<T: Clone, Size: Unsigned, Depth: Unsigned> IndexMut<Octant> for OctreeNode<T, Size, Depth>
-where
-    Depth: NonZero,
-{
-    fn index_mut(&mut self, octant: Octant) -> &mut Self::Output {
-        self.child_mut(octant)
-    }
-}
-*/
-
 impl<T: Clone, Size: Unsigned, L: MemoryLayout, Depth: Unsigned, Index: Unsigned> Deref
     for OctreeNode<T, Size, L, Depth, Index>
 {
@@ -284,11 +270,11 @@ impl<T: Clone + Default, Depth: Unsigned, L: MemoryLayout> Default for Octree<T,
 
 impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
     pub const fn size() -> usize {
-        crate::octree_size::<T>(Depth::USIZE)
+        crate::subtree_size::<T>(Depth::USIZE)
     }
 
     pub fn layout() -> Layout {
-        crate::octree_layout::<T>(Depth::USIZE)
+        crate::subtree_layout::<T>(Depth::USIZE)
     }
 
     pub(crate) fn uninit() -> Self {
@@ -354,7 +340,6 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> DerefMut for Octree<T, Depth, L
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::octant::*;
 
     #[test]
     fn octree_get_set_test() {

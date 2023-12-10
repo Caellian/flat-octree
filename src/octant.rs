@@ -1,5 +1,3 @@
-use std::mem::size_of;
-
 use typenum::{Unsigned, U0, U1, U2, U3, U4, U5, U6, U7};
 
 bitflags::bitflags! {
@@ -27,6 +25,10 @@ impl Octant {
         Octant::LUB,
         Octant::RUB,
     ];
+
+    pub const fn as_usize(&self) -> usize {
+        self.bits() as usize
+    }
 }
 
 pub trait OctantT {
