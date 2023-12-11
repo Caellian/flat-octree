@@ -63,6 +63,10 @@ pub type ChildrenRefMut<'a, T, Size, L, Depth, Index> = (
     &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRUB>>,
 );
 
+/// Octree node structure.
+///
+/// Shouldn't be constructed/dropped directly, use [`Octree`] instead - calling
+/// a drop on this type will result in UB.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct OctreeNode<
@@ -283,12 +287,12 @@ impl<T: Clone + Default, Depth: Unsigned, L: MemoryLayout> Default for Octree<T,
 impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
     /// Returns the byte size of the octree.
     pub const fn size() -> usize {
-        crate::subtree_size::<T>(Depth::USIZE)
+        crate::util::subtree_size::<T>(Depth::USIZE)
     }
 
     /// Returns the layout of the octree.
     pub fn layout() -> Layout {
-        crate::subtree_layout::<T>(Depth::USIZE)
+        crate::util::subtree_layout::<T>(Depth::USIZE)
     }
 
     pub(crate) fn uninit() -> Self {
@@ -325,9 +329,9 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
     ///
     /// It's considered UB if data doesn't follow the layout described by `L`.
     ///
-    /// It is allowed for the data to be uninitialized, but the caller must
-    /// call [`Octree::fill`] before accessing or using any functions that rely
-    /// on the octree being initialized.
+    /// It is allowed for the data to be uninitialized, but the caller must call
+    /// [`Octree::fill`] before accessing or using any functions that rely on
+    /// the octree being initialized.
     pub unsafe fn from_root_address(position: *mut T) -> Self {
         Octree {
             root: position as *mut OctreeNode<T, Depth, L>,
@@ -348,17 +352,17 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
 impl<T: Clone, Depth: Unsigned> Octree<T, Depth, BreathFirst> {
     /// Returns a slice of `T` values at the given `depth`.
     pub fn layer_slice(&self, depth: usize) -> &[T] {
-        let skip = (0..depth).map(|i| crate::layer_length(i)).sum();
+        let skip = (0..depth).map(|i| crate::util::layer_length(i)).sum();
         let start = unsafe { self.root.add(skip) } as *const T;
-        let len = crate::layer_length(depth);
+        let len = crate::util::layer_length(depth);
         unsafe { std::slice::from_raw_parts(start, len) }
     }
 
     /// Returns a mutable slice of `T` values at the given `depth`.
     pub fn layer_slice_mut(&mut self, depth: usize) -> &mut [T] {
-        let skip = (0..depth).map(|i| crate::layer_length(i)).sum();
+        let skip = (0..depth).map(|i| crate::util::layer_length(i)).sum();
         let start = unsafe { self.root.add(skip) } as *mut T;
-        let len = crate::layer_length(depth);
+        let len = crate::util::layer_length(depth);
         unsafe { std::slice::from_raw_parts_mut(start, len) }
     }
 }

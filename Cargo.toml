@@ -13,4 +13,3 @@ repository = "https://github.com/Caellian/flat-octree"
 
 [dependencies]
 typenum = "1.17"
-bitflags = "2.4"

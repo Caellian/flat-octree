@@ -1,26 +1,25 @@
 use typenum::{Unsigned, U0, U1, U2, U3, U4, U5, U6, U7};
 
-bitflags::bitflags! {
-    /// Octree octant values.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Octant: u8 {
-        /// Octree left-down-front octant
-        const LDF = 0b000;
-        /// Octree right-down-front octant
-        const RDF = 0b001;
-        /// Octree left-up-front octant
-        const LUF = 0b010;
-        /// Octree right-up-front octant
-        const RUF = 0b011;
-        /// Octree left-down-back octant
-        const LDB = 0b100;
-        /// Octree right-down-back octant
-        const RDB = 0b101;
-        /// Octree left-up-back octant
-        const LUB = 0b110;
-        /// Octree right-up-back octant
-        const RUB = 0b111;
-    }
+/// Octree octant values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Octant {
+    /// Octree left-down-front octant
+    LDF = 0b000,
+    /// Octree right-down-front octant
+    RDF = 0b001,
+    /// Octree left-up-front octant
+    LUF = 0b010,
+    /// Octree right-up-front octant
+    RUF = 0b011,
+    /// Octree left-down-back octant
+    LDB = 0b100,
+    /// Octree right-down-back octant
+    RDB = 0b101,
+    /// Octree left-up-back octant
+    LUB = 0b110,
+    /// Octree right-up-back octant
+    RUB = 0b111,
 }
 
 impl Octant {
@@ -38,7 +37,7 @@ impl Octant {
 
     /// Returns the octant value as a `usize`.
     pub const fn as_usize(&self) -> usize {
-        self.bits() as usize
+        *self as usize
     }
 }
 

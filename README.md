@@ -1,17 +1,9 @@
 # Flat Octree
 
 Octree implementation that stores data in a linear chunk of memory which makes
-it ideal for rendering applications.
+it ideal for rendering applications and directly accessing data buffers.
 
-Layout is configurable through generics, but defaults to _breath first_ layout,
-which means that values of each depth are grouped together and depths are stored
-sequentially one after the next.
-
-## Contributing
-
-Contributions are welcome.
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+Layout is configurable and defaults to _breath-first_ layout.
 
 ## License
 
