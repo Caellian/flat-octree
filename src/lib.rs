@@ -3,9 +3,9 @@ use std::{
     mem::{align_of, size_of},
 };
 
-//pub mod octree;
 pub mod octant;
 pub mod octree;
+pub mod util;
 
 pub use typenum;
 
@@ -14,17 +14,51 @@ pub mod layout {
 
     use crate::octant::Octant;
 
+    /// A trait for managing different octree memory layouts.
     pub trait MemoryLayout {
-        fn fill<T: Clone>(base: *mut T, value: T, size: usize, depth: usize, index: usize);
+        /// Fills the subtree at the given `base` pointer with the given `value`.
+        ///
+        /// # Safety
+        ///
+        /// For this function to be safe, the `base` pointer must be valid and
+        /// aligned for the given `T` type, the `size` must be the size of
+        /// the whole octree, the `depth` must be the (remaining) depth of the
+        /// subtree, and the `index` must be the index of `base` node at the
+        /// current layer (`size - depth`).
+        ///
+        /// Additionally, the surrounding layout of `base` must follow the
+        /// layout described by the [`MemoryLayout`] implementation.
+        unsafe fn fill<T: Clone>(base: *mut T, value: T, size: usize, depth: usize, index: usize);
+        /// Returns the offset of the `octant` child from node location described
+        /// by:
+        /// - `size` - the size of the whole octree,
+        /// - `depth` - the (remaining) depth of the subtree,
+        /// - `index` - the index of the node at the current (`size - depth`) layer.
         fn child_offset<T>(octant: Octant, size: usize, depth: usize, index: usize) -> usize;
     }
 
+    /// A depth-first memory layout.
+    ///
+    /// In this layout, octree values are stored such that the first value is
+    /// the root octant, which is followed by all first octant children until
+    /// the last layer which is tightly packed. After the last layer, the
+    /// second-to-last layer second octant value is stored, followed by all of
+    /// its children, and so on...
+    ///
+    /// This representation is better for CPU processing and collision
+    /// detection.
     pub struct DepthFirst;
     impl MemoryLayout for DepthFirst {
-        fn fill<T: Clone>(base: *mut T, value: T, _size: usize, depth: usize, _index: usize) {
+        unsafe fn fill<T: Clone>(
+            base: *mut T,
+            value: T,
+            _size: usize,
+            depth: usize,
+            _index: usize,
+        ) {
             let tailing = crate::subtree_size::<T>(depth) / size_of::<T>();
             for i in 0..tailing {
-                unsafe { base.add(i).write(value.clone()) }
+                base.add(i).write(value.clone())
             }
         }
 
@@ -38,26 +72,34 @@ pub mod layout {
         }
     }
 
+    /// A breath-first memory layout.
+    ///
+    /// In this layout, octree values are stored such that every layer values
+    /// are stored together, starting from the root layer (1 value), followed by
+    /// the first layer (8 values), then third (64 values), and so on...
+    ///
+    /// This representation is ideal for parallel processing and LOD streaming.
+    ///
+    /// Additionally, it allows accessing each layer directly as a slice of
+    /// memory.
     pub struct BreathFirst;
     impl MemoryLayout for BreathFirst {
-        fn fill<T: Clone>(base: *mut T, value: T, size: usize, depth: usize, index: usize) {
-            unsafe {
-                let height = size - depth;
-                let mut start = base;
+        unsafe fn fill<T: Clone>(base: *mut T, value: T, size: usize, depth: usize, index: usize) {
+            let height = size - depth;
+            let mut start = base;
 
-                for i in 0..=depth {
-                    let fill_size = crate::layer_length(i);
-                    for j in 0..fill_size {
-                        start.add(j).write(value.clone());
-                    }
-
-                    let layer_i = height + i;
-                    let layer_size = crate::layer_length(layer_i);
-                    let end_of_current = (layer_size - (index + 1) * fill_size) * size_of::<T>();
-
-                    let skip_leading = index * fill_size * 8 * size_of::<T>();
-                    start = start.add(fill_size + end_of_current + skip_leading);
+            for i in 0..=depth {
+                let fill_size = crate::layer_length(i);
+                for j in 0..fill_size {
+                    start.add(j).write(value.clone());
                 }
+
+                let layer_i = height + i;
+                let layer_size = crate::layer_length(layer_i);
+                let end_of_current = layer_size - (index + 1) * fill_size;
+
+                let skip_leading = index * fill_size * 8;
+                start = start.add(fill_size + end_of_current + skip_leading);
             }
         }
 
@@ -78,11 +120,13 @@ pub mod layout {
     pub type BF = BreathFirst;
 }
 
+/// Returns a length of an octree layer at the given `depth`.
 #[inline(always)]
 pub const fn layer_length(depth: usize) -> usize {
     8usize.pow(depth as u32)
 }
 
+/// Returns a length of an octree subtree for the given `depth`.
 pub const fn subtree_length(depth: usize) -> usize {
     let mut accum = 1;
 
@@ -93,13 +137,15 @@ pub const fn subtree_length(depth: usize) -> usize {
         i -= 1;
     }
 
-    return accum;
+    accum
 }
 
+/// Returns a size of an octree subtree for the given `depth`.
 pub const fn subtree_size<T>(depth: usize) -> usize {
-    return subtree_length(depth) * size_of::<T>();
+    subtree_length(depth) * size_of::<T>()
 }
 
+/// Returns a [`Layout`] of an octree subtree for the given `depth`.
 pub fn subtree_layout<T>(depth: usize) -> Layout {
     Layout::from_size_align(subtree_size::<T>(depth), align_of::<T>()).unwrap()
 }

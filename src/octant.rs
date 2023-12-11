@@ -1,20 +1,30 @@
 use typenum::{Unsigned, U0, U1, U2, U3, U4, U5, U6, U7};
 
 bitflags::bitflags! {
+    /// Octree octant values.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Octant: u8 {
+        /// Octree left-down-front octant
         const LDF = 0b000;
+        /// Octree right-down-front octant
         const RDF = 0b001;
+        /// Octree left-up-front octant
         const LUF = 0b010;
+        /// Octree right-up-front octant
         const RUF = 0b011;
+        /// Octree left-down-back octant
         const LDB = 0b100;
+        /// Octree right-down-back octant
         const RDB = 0b101;
+        /// Octree left-up-back octant
         const LUB = 0b110;
+        /// Octree right-up-back octant
         const RUB = 0b111;
     }
 }
 
 impl Octant {
+    /// Collection of all valid octant values.
     pub const ALL: [Octant; 8] = [
         Octant::LDF,
         Octant::RDF,
@@ -26,17 +36,23 @@ impl Octant {
         Octant::RUB,
     ];
 
+    /// Returns the octant value as a `usize`.
     pub const fn as_usize(&self) -> usize {
         self.bits() as usize
     }
 }
 
+/// A trait for type representations of an octant.
 pub trait OctantT {
+    /// The octant value.
     const VALUE: Octant;
+    /// The octant `usize` value.
     const USIZE: usize;
+    /// The octant compile-time integer value.
     type IndexT: Unsigned;
 }
 
+/// Type representation of [`Octant::LDF`] (left-down-front octant).
 pub struct OctantLDF;
 impl OctantT for OctantLDF {
     const VALUE: Octant = Octant::LDF;
@@ -44,6 +60,7 @@ impl OctantT for OctantLDF {
     type IndexT = U0;
 }
 
+/// Type representation of [`Octant::RDF`] (right-down-front octant).
 pub struct OctantRDF;
 impl OctantT for OctantRDF {
     const VALUE: Octant = Octant::RDF;
@@ -51,6 +68,7 @@ impl OctantT for OctantRDF {
     type IndexT = U1;
 }
 
+/// Type representation of [`Octant::LUF`] (left-up-front octant).
 pub struct OctantLUF;
 impl OctantT for OctantLUF {
     const VALUE: Octant = Octant::LUF;
@@ -58,6 +76,7 @@ impl OctantT for OctantLUF {
     type IndexT = U2;
 }
 
+/// Type representation of [`Octant::RUF`] (right-up-front octant).
 pub struct OctantRUF;
 impl OctantT for OctantRUF {
     const VALUE: Octant = Octant::RUF;
@@ -65,6 +84,7 @@ impl OctantT for OctantRUF {
     type IndexT = U3;
 }
 
+/// Type representation of [`Octant::LDB`] (left-down-back octant).
 pub struct OctantLDB;
 impl OctantT for OctantLDB {
     const VALUE: Octant = Octant::LDB;
@@ -72,6 +92,7 @@ impl OctantT for OctantLDB {
     type IndexT = U4;
 }
 
+/// Type representation of [`Octant::RDB`] (right-down-back octant).
 pub struct OctantRDB;
 impl OctantT for OctantRDB {
     const VALUE: Octant = Octant::RDB;
@@ -79,6 +100,7 @@ impl OctantT for OctantRDB {
     type IndexT = U5;
 }
 
+/// Type representation of [`Octant::LUB`] (left-up-back octant).
 pub struct OctantLUB;
 impl OctantT for OctantLUB {
     const VALUE: Octant = Octant::LUB;
@@ -86,6 +108,7 @@ impl OctantT for OctantLUB {
     type IndexT = U6;
 }
 
+/// Type representation of [`Octant::RUB`] (right-up-back octant).
 pub struct OctantRUB;
 impl OctantT for OctantRUB {
     const VALUE: Octant = Octant::RUB;

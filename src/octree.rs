@@ -1,9 +1,8 @@
 use std::{
     alloc::Layout,
     marker::PhantomData,
-    mem::{align_of, size_of},
-    ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, Sub},
-    process::Output,
+    mem::size_of,
+    ops::{Add, Deref, DerefMut, Mul, Sub},
     ptr::{addr_of, addr_of_mut, null_mut},
 };
 
@@ -12,7 +11,6 @@ use typenum::*;
 use crate::{
     layout::{BreathFirst, MemoryLayout},
     octant::*,
-    subtree_size,
 };
 
 mod sealed {
@@ -42,6 +40,7 @@ mod sealed {
 type ChildIndex<I, ChildOctant> =
     <<I as Mul<U8>>::Output as Add<<ChildOctant as OctantT>::IndexT>>::Output;
 
+/// Utility type alias for [`OctreeNode::children`] result.
 pub type ChildrenRef<'a, T, Size, L, Depth, Index> = (
     &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLDF>>,
     &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRDF>>,
@@ -52,6 +51,7 @@ pub type ChildrenRef<'a, T, Size, L, Depth, Index> = (
     &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLUB>>,
     &'a OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRUB>>,
 );
+/// Utility type alias for [`OctreeNode::children_mut`] result.
 pub type ChildrenRefMut<'a, T, Size, L, Depth, Index> = (
     &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantLDF>>,
     &'a mut OctreeNode<T, Size, L, Sub1<Depth>, ChildIndex<Index, OctantRDF>>,
@@ -90,13 +90,15 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
     }
 
     pub fn set_value(&mut self, value: T) {
-        L::fill(
-            addr_of_mut!(self.value),
-            value,
-            S::USIZE,
-            D::USIZE,
-            I::USIZE,
-        )
+        unsafe {
+            L::fill(
+                addr_of_mut!(self.value),
+                value,
+                S::USIZE,
+                D::USIZE,
+                I::USIZE,
+            )
+        }
     }
 
     pub fn child<ChildOctant: OctantT>(
@@ -339,14 +341,74 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> DerefMut for Octree<T, Depth, L
 
 #[cfg(test)]
 mod tests {
+    use crate::layout::DepthFirst;
+
     use super::*;
 
     #[test]
-    fn octree_get_set_test() {
+    fn octree_index_bf_test() {
+        let test = Octree::<usize, U3>::new(1);
+        let root = test.root as *const usize;
+
+        unsafe {
+            assert_eq!(
+                addr_of!(*test.child::<OctantLDF>()) as *const usize,
+                root.add(1)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantRDF>()) as *const usize,
+                root.add(2)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantLUF>()) as *const usize,
+                root.add(3)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantRUF>()) as *const usize,
+                root.add(4)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantLDB>()) as *const usize,
+                root.add(5)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantRDB>()) as *const usize,
+                root.add(6)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantLUB>()) as *const usize,
+                root.add(7)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantRUB>()) as *const usize,
+                root.add(8)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantLDF>().child::<OctantLDF>()) as *const usize,
+                root.add(9)
+            );
+            assert_eq!(
+                addr_of!(*test.child::<OctantRDF>().child::<OctantLDF>()) as *const usize,
+                root.add(17)
+            );
+            assert_eq!(
+                addr_of!(*test
+                    .child::<OctantLDF>()
+                    .child::<OctantLDF>()
+                    .child::<OctantLDF>()) as *const usize,
+                root.add(73)
+            );
+        }
+    }
+
+    // TODO: index_df_test
+
+    #[test]
+    fn octree_get_set_bf_test() {
         let mut test = Octree::<usize, U2>::new(1);
         test.set_value(2);
-        let fbl = test.child_mut::<OctantLDF>();
-        fbl.set_value(3);
+        let ldf = test.child_mut::<OctantLDF>();
+        ldf.set_value(3);
         test.child_mut::<OctantLUF>().set_value(4);
         test.child_mut::<OctantLUF>()
             .child_mut::<OctantRUF>()
@@ -368,83 +430,82 @@ mod tests {
         assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 3);
 
         assert_eq!(**test.child::<OctantRDF>(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDF>().child::<OctantRUB>().value(), 2);
 
         assert_eq!(**test.child::<OctantLUF>(), 4);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 4);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 4);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 4);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 5);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 4);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 4);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 4);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 4);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantLDF>().value(), 4);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantRDF>().value(), 4);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantLUF>().value(), 4);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantRUF>().value(), 5);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantLDB>().value(), 4);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantRDB>().value(), 4);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantLUB>().value(), 4);
+        assert_eq!(*test.child::<OctantLUF>().child::<OctantRUB>().value(), 4);
 
         assert_eq!(**test.child::<OctantRUF>(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUF>().child::<OctantRUB>().value(), 2);
 
         assert_eq!(**test.child::<OctantLDB>(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLDB>().child::<OctantRUB>().value(), 2);
 
         assert_eq!(**test.child::<OctantRDB>(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRDB>().child::<OctantRUB>().value(), 2);
 
         assert_eq!(**test.child::<OctantLUB>(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 5);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantRDB>().value(), 6);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantLUB>().child::<OctantRUB>().value(), 2);
 
         assert_eq!(**test.child::<OctantRUB>(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUF>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRDB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantLUB>().value(), 2);
-        assert_eq!(*test.child::<OctantLDF>().child::<OctantRUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantLDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantRDF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantLUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantRUF>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantLDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantRDB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantLUB>().value(), 2);
+        assert_eq!(*test.child::<OctantRUB>().child::<OctantRUB>().value(), 2);
     }
 
-    /*
     #[test]
-    fn octree_layout_test() {
+    fn octree_layout_bf_test() {
         let mut test = Octree::<usize, U2>::new(1);
         test.set_value(2);
-        let fbl: &mut OctreeNode<usize, U2, U1> = &mut test.child_mut::<OctantLDF>();
-        fbl.set_value(3);
+        let ldf = test.child_mut::<OctantLDF>();
+        ldf.set_value(3);
         test.child_mut::<OctantLUF>().set_value(4);
         test.child_mut::<OctantLUF>()
             .child_mut::<OctantRUF>()
@@ -456,14 +517,37 @@ mod tests {
         let expected_data: [usize; 73] = [
             2, 3, 2, 4, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 5,
             4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-            2, 2, 2, 2, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            2, 2, 2, 2, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         ];
 
-        let inner = unsafe { std::mem::transmute::<_, *mut OctreeNode<usize, U2>>(test) };
-        let base_addr = inner as *const usize;
+        let base_addr = unsafe { std::mem::transmute::<_, *const usize>(test) };
 
         for (i, value) in expected_data.into_iter().enumerate() {
             assert_eq!(unsafe { *(base_addr.add(i)) }, value);
         }
-    } */
+    }
+
+    #[test]
+    fn octree_layout_df_test() {
+        let mut test = Octree::<usize, U2, DepthFirst>::new(1);
+        test.set_value(2);
+        let ldf = test.child_mut::<OctantLDF>();
+        ldf.set_value(3);
+        test.child_mut::<OctantRUB>().set_value(4);
+        test.child_mut::<OctantLDB>()
+            .child_mut::<OctantLDB>()
+            .set_value(5);
+
+        let expected_data: [usize; 73] = [
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3,
+            3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2,
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 5,
+        ];
+
+        let base_addr = unsafe { std::mem::transmute::<_, *const usize>(test) };
+
+        for (i, value) in expected_data.into_iter().enumerate() {
+            assert_eq!(unsafe { *(base_addr.add(i)) }, value);
+        }
+    }
 }
