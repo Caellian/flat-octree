@@ -77,6 +77,7 @@ pub struct OctreeNode<
 }
 
 impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNode<T, S, L, D, I> {
+    /// Returns the current node octant relative to parent.
     pub const fn octant(&self) -> Octant
     where
         D: IsLess<S>,
@@ -85,10 +86,12 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         Octant::ALL[I::USIZE % 8]
     }
 
+    /// Returns the node value.
     pub fn value(&self) -> &T {
         &self.value
     }
 
+    /// Sets the `value` of this node as well as its descendants.
     pub fn set_value(&mut self, value: T) {
         unsafe {
             L::fill(
@@ -101,6 +104,7 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         }
     }
 
+    /// Returns the child node at the given `octant`.
     pub fn child<ChildOctant: OctantT>(
         &self,
     ) -> &OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>
@@ -123,6 +127,7 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         }
     }
 
+    /// Returns the mutable child node at the given `octant`.
     pub fn child_mut<ChildOctant: OctantT>(
         &mut self,
     ) -> &mut OctreeNode<T, S, L, Sub1<D>, ChildIndex<I, ChildOctant>>
@@ -145,6 +150,7 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         }
     }
 
+    /// Returns a tuple of all the children nodes.
     pub fn children<'a>(&'a self) -> ChildrenRef<'a, T, S, L, D, I>
     where
         D: sealed::NotLast,
@@ -186,6 +192,7 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         )
     }
 
+    /// Returns a mutable tuple of all the children nodes.
     pub fn children_mut<'a>(&'a mut self) -> ChildrenRefMut<'a, T, S, L, D, I>
     where
         D: sealed::NotLast,
@@ -258,6 +265,9 @@ impl<T: Clone, Size: Unsigned, L: MemoryLayout, Depth: Unsigned, Index: Unsigned
     }
 }
 
+/// Octree structure.
+///
+/// Only stores a pointer to the root node.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Octree<T: Clone, Depth: Unsigned, L: MemoryLayout = BreathFirst> {
@@ -271,10 +281,12 @@ impl<T: Clone + Default, Depth: Unsigned, L: MemoryLayout> Default for Octree<T,
 }
 
 impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
+    /// Returns the byte size of the octree.
     pub const fn size() -> usize {
         crate::subtree_size::<T>(Depth::USIZE)
     }
 
+    /// Returns the layout of the octree.
     pub fn layout() -> Layout {
         crate::subtree_layout::<T>(Depth::USIZE)
     }
@@ -283,6 +295,7 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
         Octree { root: null_mut() }
     }
 
+    /// Fills the octree with the provided `value`.
     pub fn fill(&mut self, value: T) {
         self.drop_root();
         let result: *mut OctreeNode<T, Depth, L> =
@@ -296,12 +309,25 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
         self.root = result as *mut OctreeNode<T, Depth, L>;
     }
 
+    /// Creates an octree (on heap) with all nodes having the initial `value`.
     pub fn new(value: T) -> Self {
         let mut result = Self::uninit();
         result.fill(value);
         result
     }
 
+    /// Creates a new octree structure with root at the provided `position`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the given `position` is a valid pointer to
+    /// the root octree node followed by data arranged in `L` layout.
+    ///
+    /// It's considered UB if data doesn't follow the layout described by `L`.
+    ///
+    /// It is allowed for the data to be uninitialized, but the caller must
+    /// call [`Octree::fill`] before accessing or using any functions that rely
+    /// on the octree being initialized.
     pub unsafe fn from_root_address(position: *mut T) -> Self {
         Octree {
             root: position as *mut OctreeNode<T, Depth, L>,
@@ -316,6 +342,24 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
                 self.root = null_mut();
             }
         }
+    }
+}
+
+impl<T: Clone, Depth: Unsigned> Octree<T, Depth, BreathFirst> {
+    /// Returns a slice of `T` values at the given `depth`.
+    pub fn layer_slice(&self, depth: usize) -> &[T] {
+        let skip = (0..depth).map(|i| crate::layer_length(i)).sum();
+        let start = unsafe { self.root.add(skip) } as *const T;
+        let len = crate::layer_length(depth);
+        unsafe { std::slice::from_raw_parts(start, len) }
+    }
+
+    /// Returns a mutable slice of `T` values at the given `depth`.
+    pub fn layer_slice_mut(&mut self, depth: usize) -> &mut [T] {
+        let skip = (0..depth).map(|i| crate::layer_length(i)).sum();
+        let start = unsafe { self.root.add(skip) } as *mut T;
+        let len = crate::layer_length(depth);
+        unsafe { std::slice::from_raw_parts_mut(start, len) }
     }
 }
 
