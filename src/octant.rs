@@ -41,6 +41,28 @@ impl Octant {
     }
 }
 
+impl TryFrom<u8> for Octant {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0b000..=0b111 => Ok(unsafe {
+                // SAFETY: `value` is in the range `0b000..=0b111`.
+                std::mem::transmute(value)
+            }),
+            _ => Err(()),
+        }
+    }
+}
+impl TryFrom<usize> for Octant {
+    type Error = ();
+
+    #[inline(always)]
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        Self::try_from(value as u8)
+    }
+}
+
 /// A trait for type representations of an octant.
 pub trait OctantT {
     /// The octant value.

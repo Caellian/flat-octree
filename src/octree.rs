@@ -1,19 +1,25 @@
 use std::{
     alloc::Layout,
     marker::PhantomData,
-    mem::size_of,
+    mem::{forget, size_of},
     ops::{Add, Deref, DerefMut, Mul, Sub},
     ptr::{addr_of, addr_of_mut, null_mut},
 };
 
-use typenum::*;
+use typenum::{
+    op, IsLess, IsLessOrEqual, Le, LeEq, Same, Sub1, True, Unsigned, U0, U1, U2, U3, U4, U5, U6,
+    U7, U8,
+};
 
 use crate::{
-    layout::{BreathFirst, MemoryLayout},
+    layout::{BreathFirst, OctreeLayout},
     octant::*,
+    util::{subtree_length, subtree_size},
 };
 
 mod sealed {
+    use typenum::{NonZero, Unsigned, B1, U8};
+
     use super::*;
 
     pub trait NotLast: Unsigned + NonZero + Sub<B1>
@@ -37,8 +43,7 @@ mod sealed {
     }
 }
 
-type ChildIndex<I, ChildOctant> =
-    <<I as Mul<U8>>::Output as Add<<ChildOctant as OctantT>::IndexT>>::Output;
+type ChildIndex<I, ChildOctant> = <op!(I * U8) as Add<<ChildOctant as OctantT>::IndexT>>::Output;
 
 /// Utility type alias for [`OctreeNode::children`] result.
 pub type ChildrenRef<'a, T, Size, L, Depth, Index> = (
@@ -72,7 +77,7 @@ pub type ChildrenRefMut<'a, T, Size, L, Depth, Index> = (
 pub struct OctreeNode<
     T: Clone,
     Size: Unsigned,
-    L: MemoryLayout,
+    L: OctreeLayout,
     Depth: Unsigned = Size,
     LayerIndex: Unsigned = U0,
 > {
@@ -80,7 +85,7 @@ pub struct OctreeNode<
     _phantom: PhantomData<(L, Size, Depth, LayerIndex)>,
 }
 
-impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNode<T, S, L, D, I> {
+impl<T: Clone, S: Unsigned, L: OctreeLayout, D: Unsigned, I: Unsigned> OctreeNode<T, S, L, D, I> {
     /// Returns the current node octant relative to parent.
     pub const fn octant(&self) -> Octant
     where
@@ -154,6 +159,71 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         }
     }
 
+    /// Propagates most frequent subtree values from bottom to the top.
+    ///
+    /// This is a no-op implementation when the subtree depth is 0 (a
+    /// single/leaf value).
+    pub fn propagate_common(&mut self)
+    where
+        T: PartialEq,
+    {
+        #[inline(always)]
+        unsafe fn child_ref<'a, T: Clone, S: Unsigned, L: OctreeLayout>(
+            base: &T,
+            octant: usize,
+            depth: usize,
+            index: usize,
+        ) -> &'a T {
+            let pos = addr_of!(*base).add(L::child_offset::<T>(
+                Octant::try_from(octant as u8).unwrap_unchecked(),
+                S::USIZE,
+                depth,
+                index,
+            )) as *const T;
+            pos.as_ref().unwrap_unchecked()
+        }
+
+        unsafe fn propagate_layer<T: Clone + PartialEq, S: Unsigned, L: OctreeLayout>(
+            base: *mut T,
+            layer_depth: usize,
+            layer_index: usize,
+        ) {
+            // No need to balance if the subtree depth is 0
+            if layer_depth == 0 {
+                return;
+            }
+
+            // TODO: recursion required for value to be correct
+            let value = base.as_mut().unwrap_unchecked();
+            let mut counts = [0u8; 8];
+            'outer: for child_i in 0..8 {
+                let child = child_ref::<T, S, L>(&value, child_i, layer_depth, layer_index);
+
+                // TODO: If Hash this is implemented inner loop can be a hash lookup
+                for compared_i in 0..child_i {
+                    let other = child_ref::<T, S, L>(&value, child_i, layer_depth, layer_index);
+                    if matches!(child.eq(other), true) {
+                        counts[compared_i] += 1;
+                        continue 'outer;
+                    }
+                }
+                counts[child_i] += 1;
+            }
+
+            let largest_i = counts
+                .iter()
+                .enumerate()
+                .max_by_key(|it| it.1)
+                .map(|it| it.0)
+                .unwrap();
+
+            let largest = child_ref::<T, S, L>(&value, largest_i, layer_depth, layer_index);
+            *value = largest.clone();
+        }
+
+        unsafe { propagate_layer::<T, S, L>(&mut self.value, D::USIZE, I::USIZE) }
+    }
+
     /// Returns a tuple of all the children nodes.
     pub fn children<'a>(&'a self) -> ChildrenRef<'a, T, S, L, D, I>
     where
@@ -175,14 +245,14 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
         <I as Mul<U8>>::Output: Add<U5>,
         <I as Mul<U8>>::Output: Add<U6>,
         <I as Mul<U8>>::Output: Add<U7>,
-        <<I as Mul<U8>>::Output as Add<U0>>::Output: Unsigned,
-        <<I as Mul<U8>>::Output as Add<U1>>::Output: Unsigned,
-        <<I as Mul<U8>>::Output as Add<U2>>::Output: Unsigned,
-        <<I as Mul<U8>>::Output as Add<U3>>::Output: Unsigned,
-        <<I as Mul<U8>>::Output as Add<U4>>::Output: Unsigned,
-        <<I as Mul<U8>>::Output as Add<U5>>::Output: Unsigned,
-        <<I as Mul<U8>>::Output as Add<U6>>::Output: Unsigned,
-        <<I as Mul<U8>>::Output as Add<U7>>::Output: Unsigned,
+        op!(I * U8 + U0): Unsigned,
+        op!(I * U8 + U1): Unsigned,
+        op!(I * U8 + U2): Unsigned,
+        op!(I * U8 + U3): Unsigned,
+        op!(I * U8 + U4): Unsigned,
+        op!(I * U8 + U5): Unsigned,
+        op!(I * U8 + U6): Unsigned,
+        op!(I * U8 + U7): Unsigned,
     {
         (
             self.child::<OctantLDF>(),
@@ -259,7 +329,7 @@ impl<T: Clone, S: Unsigned, L: MemoryLayout, D: Unsigned, I: Unsigned> OctreeNod
     }
 }
 
-impl<T: Clone, Size: Unsigned, L: MemoryLayout, Depth: Unsigned, Index: Unsigned> Deref
+impl<T: Clone, Size: Unsigned, L: OctreeLayout, Depth: Unsigned, Index: Unsigned> Deref
     for OctreeNode<T, Size, L, Depth, Index>
 {
     type Target = T;
@@ -269,22 +339,40 @@ impl<T: Clone, Size: Unsigned, L: MemoryLayout, Depth: Unsigned, Index: Unsigned
     }
 }
 
+// TODO: Add a reference wrapper for Octree to allow reading data without copying
+// it first.
+
 /// Octree structure.
 ///
-/// Only stores a pointer to the root node.
+/// This structure is a smart wrapper of `Vec<T>` that provides safe octree
+/// access semantics checked at compile time.
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Octree<T: Clone, Depth: Unsigned, L: MemoryLayout = BreathFirst> {
-    root: *mut OctreeNode<T, Depth, L>,
+pub struct Octree<T: Clone, Depth: Unsigned, L: OctreeLayout = BreathFirst> {
+    data: Vec<T>,
+    _phantom: PhantomData<(Depth, L)>,
 }
 
-impl<T: Clone + Default, Depth: Unsigned, L: MemoryLayout> Default for Octree<T, Depth, L> {
+impl<T: Clone + Default, Depth: Unsigned, L: OctreeLayout> Default for Octree<T, Depth, L> {
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
+impl<T: Clone, Depth: Unsigned, L: OctreeLayout> Octree<T, Depth, L> {
+    /// Creates an octree with all nodes having the initial `value`.
+    pub fn new(value: T) -> Self {
+        let entry_count = subtree_length(Depth::USIZE);
+        let mut result = Octree {
+            data: Vec::with_capacity(entry_count),
+            _phantom: PhantomData,
+        };
+        for i in 0..entry_count {
+            result.data.push(value.clone());
+        }
+        result
+    }
+
     /// Returns the byte size of the octree.
     pub const fn size() -> usize {
         crate::util::subtree_size::<T>(Depth::USIZE)
@@ -295,31 +383,34 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
         crate::util::subtree_layout::<T>(Depth::USIZE)
     }
 
-    pub(crate) fn uninit() -> Self {
-        Octree { root: null_mut() }
+    /// Returns a reference to the root node of the octree (first value).
+    pub fn root(&self) -> &OctreeNode<T, Depth, L> {
+        unsafe {
+            (self.data.as_ptr() as *const OctreeNode<T, Depth, L>)
+                .as_ref()
+                .unwrap_unchecked()
+        }
+    }
+
+    /// Returns a mutable reference to the root node of the octree (first value).
+    pub fn root_mut(&mut self) -> &mut OctreeNode<T, Depth, L> {
+        unsafe {
+            (self.data.as_mut_ptr() as *mut OctreeNode<T, Depth, L>)
+                .as_mut()
+                .unwrap_unchecked()
+        }
     }
 
     /// Fills the octree with the provided `value`.
     pub fn fill(&mut self, value: T) {
-        self.drop_root();
-        let result: *mut OctreeNode<T, Depth, L> =
-            unsafe { std::alloc::alloc(Self::layout()) as *mut OctreeNode<T, Depth, L> };
-
-        let count = Self::size() / size_of::<T>();
+        self.data.clear();
+        let count = subtree_length(Depth::USIZE);
         for i in 0..count {
-            unsafe { (result as *mut T).add(i).write(value.clone()) }
+            self.data.push(value.clone());
         }
-
-        self.root = result as *mut OctreeNode<T, Depth, L>;
     }
 
-    /// Creates an octree (on heap) with all nodes having the initial `value`.
-    pub fn new(value: T) -> Self {
-        let mut result = Self::uninit();
-        result.fill(value);
-        result
-    }
-
+    /*
     /// Creates a new octree structure with root at the provided `position`.
     ///
     /// # Safety
@@ -337,66 +428,82 @@ impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Octree<T, Depth, L> {
             root: position as *mut OctreeNode<T, Depth, L>,
         }
     }
+    */
 
-    fn drop_root(&mut self) {
+    /// Returns a byte slice of data buffer.
+    pub fn as_bytes(&self) -> &[u8] {
         unsafe {
-            if let Some(root) = self.root.as_mut() {
-                let root = addr_of_mut!(*root) as *mut u8;
-                std::alloc::dealloc(root, Self::layout());
-                self.root = null_mut();
-            }
+            std::slice::from_raw_parts(
+                self.data.as_ptr() as *const u8,
+                subtree_size::<T>(Depth::USIZE),
+            )
         }
     }
 }
 
-impl<T: Clone, Depth: Unsigned> Octree<T, Depth, BreathFirst> {
+impl<T: Clone, D: Unsigned> Octree<T, D, BreathFirst> {
     /// Returns a slice of `T` values at the given `depth`.
-    pub fn layer_slice(&self, depth: usize) -> &[T] {
-        let skip = (0..depth).map(|i| crate::util::layer_length(i)).sum();
-        let start = unsafe { self.root.add(skip) } as *const T;
-        let len = crate::util::layer_length(depth);
-        unsafe { std::slice::from_raw_parts(start, len) }
+    pub fn layer_slice<Depth: Unsigned>(&self) -> &[T]
+    where
+        Depth: IsLessOrEqual<D>,
+        LeEq<Depth, D>: Same<True>,
+    {
+        let skip = (0..Depth::USIZE)
+            .map(|i| crate::util::layer_length(i))
+            .sum();
+        let len = crate::util::layer_length(Depth::USIZE);
+        &self.data[skip..skip + len]
     }
 
     /// Returns a mutable slice of `T` values at the given `depth`.
-    pub fn layer_slice_mut(&mut self, depth: usize) -> &mut [T] {
-        let skip = (0..depth).map(|i| crate::util::layer_length(i)).sum();
-        let start = unsafe { self.root.add(skip) } as *mut T;
-        let len = crate::util::layer_length(depth);
-        unsafe { std::slice::from_raw_parts_mut(start, len) }
+    pub fn layer_slice_mut<Depth: Unsigned>(&mut self) -> &mut [T]
+    where
+        Depth: IsLessOrEqual<D>,
+        LeEq<Depth, D>: Same<True>,
+    {
+        let skip = (0..Depth::USIZE)
+            .map(|i| crate::util::layer_length(i))
+            .sum();
+        let len = crate::util::layer_length(Depth::USIZE);
+        &mut self.data[skip..skip + len]
     }
 }
 
-impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Drop for Octree<T, Depth, L> {
-    fn drop(&mut self) {
-        self.drop_root()
-    }
-}
-
-impl<T: Clone, Depth: Unsigned, L: MemoryLayout> Deref for Octree<T, Depth, L> {
+impl<T: Clone, Depth: Unsigned, L: OctreeLayout> Deref for Octree<T, Depth, L> {
     type Target = OctreeNode<T, Depth, L>;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { self.root.as_ref().expect("octree not initialized") }
+        unsafe { self.root() }
     }
 }
 
-impl<T: Clone, Depth: Unsigned, L: MemoryLayout> DerefMut for Octree<T, Depth, L> {
+impl<T: Clone, Depth: Unsigned, L: OctreeLayout> DerefMut for Octree<T, Depth, L> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.root.as_mut().expect("octree not initialized") }
+        unsafe { self.root_mut() }
     }
+}
+
+impl<T: Clone, Depth: Unsigned, L: OctreeLayout> AsRef<[T]> for Octree<T, Depth, L> {
+    fn as_ref(&self) -> &[T] {
+        &self.data
+    }
+}
+
+/// Allows rearranging octree data between different layouts.
+pub trait FromLayout<Other: OctreeLayout> {
+    /// Constructs this octree from a an octree with a different memory
+    /// different layout.
+    fn from_layout<T: Clone, Depth: Unsigned>(other: Octree<T, Depth, Other>) -> Self;
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::layout::DepthFirst;
-
     use super::*;
 
     #[test]
     fn octree_index_bf_test() {
         let test = Octree::<usize, U3>::new(1);
-        let root = test.root as *const usize;
+        let root = test.data.as_ptr() as *const usize;
 
         unsafe {
             assert_eq!(
@@ -448,8 +555,6 @@ mod tests {
             );
         }
     }
-
-    // TODO: index_df_test
 
     #[test]
     fn octree_get_set_bf_test() {
@@ -566,30 +671,6 @@ mod tests {
             2, 3, 2, 4, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 5,
             4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
             2, 2, 2, 2, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-        ];
-
-        let base_addr = unsafe { std::mem::transmute::<_, *const usize>(test) };
-
-        for (i, value) in expected_data.into_iter().enumerate() {
-            assert_eq!(unsafe { *(base_addr.add(i)) }, value);
-        }
-    }
-
-    #[test]
-    fn octree_layout_df_test() {
-        let mut test = Octree::<usize, U2, DepthFirst>::new(1);
-        test.set_value(2);
-        let ldf = test.child_mut::<OctantLDF>();
-        ldf.set_value(3);
-        test.child_mut::<OctantRUB>().set_value(4);
-        test.child_mut::<OctantLDB>()
-            .child_mut::<OctantLDB>()
-            .set_value(5);
-
-        let expected_data: [usize; 73] = [
-            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3,
-            3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2,
-            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 5,
         ];
 
         let base_addr = unsafe { std::mem::transmute::<_, *const usize>(test) };

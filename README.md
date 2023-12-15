@@ -1,7 +1,8 @@
 # Flat Octree
 
-Octree implementation that stores data in a linear chunk of memory which makes
-it ideal for rendering applications and directly accessing data buffers.
+Octree implementation that stores data in a densly populated (no missing
+values), linear chunk of memory which makes it ideal for rendering applications
+and directly accessing data buffers.
 
 Layout is configurable and defaults to _breath-first_ layout.
 

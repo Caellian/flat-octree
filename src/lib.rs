@@ -19,7 +19,7 @@ pub mod layout {
     use crate::octant::Octant;
 
     /// A trait for managing different octree memory layouts.
-    pub trait MemoryLayout {
+    pub trait OctreeLayout {
         /// Fills the subtree at the given `base` pointer with the given
         /// `value`.
         ///
@@ -54,7 +54,7 @@ pub mod layout {
     /// This representation is better for CPU processing and collision
     /// detection.
     pub struct DepthFirst;
-    impl MemoryLayout for DepthFirst {
+    impl OctreeLayout for DepthFirst {
         unsafe fn fill<T: Clone>(
             base: *mut T,
             value: T,
@@ -89,7 +89,7 @@ pub mod layout {
     /// Additionally, it allows accessing each layer directly as a slice of
     /// memory.
     pub struct BreathFirst;
-    impl MemoryLayout for BreathFirst {
+    impl OctreeLayout for BreathFirst {
         unsafe fn fill<T: Clone>(base: *mut T, value: T, size: usize, depth: usize, index: usize) {
             let height = size - depth;
             let mut start = base;
